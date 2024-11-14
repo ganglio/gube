@@ -1,4 +1,4 @@
-module github.com/flynn-nrg/gube
+module github.com/ganglio/gube
 
 go 1.18
 
