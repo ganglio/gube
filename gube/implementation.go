@@ -1,8 +1,10 @@
 package gube
 
 import (
+	"fmt"
 	"io"
 	"math"
+	"strings"
 )
 
 // Ensure interface compliance.
@@ -21,6 +23,60 @@ type GubeImpl struct {
 // NewFromReader returns a Gube instance created from the reader data.
 func NewFromReader(r io.Reader) (*GubeImpl, error) {
 	return parseFromReader(r)
+}
+
+func NewFromString(s string) (*GubeImpl, error) {
+	return parseFromReader(strings.NewReader(s))
+}
+
+func (gi *GubeImpl) Diff(other *GubeImpl) float64 {
+	if gi.TableType() != other.TableType() || gi.TableSize() != other.TableSize() {
+		return -1.0
+	}
+
+	if gi.TableType() == LUT_1D {
+		td1 := *gi.TableData1D()
+		td2 := *other.TableData1D()
+		if len(td1) != len(td2) {
+			return -1.0
+		}
+		diffs := []float64{}
+		for i := 0; i < len(td1); i++ {
+			diff := math.Abs(td1[i][0]-td2[i][0]) + math.Abs(td1[i][1]-td2[i][1]) + math.Abs(td1[i][2]-td2[i][2])
+			diffs = append(diffs, diff)
+		}
+		sum := 0.0
+		for _, diff := range diffs {
+			sum += diff * diff
+		}
+		return math.Sqrt(sum) / float64(len(td1))
+	} else {
+		td1 := *gi.TableData3D()
+		td2 := *other.TableData3D()
+		if len(td1) != len(td2) {
+			return 1.0
+		}
+		diffs := []float64{}
+		sum := 0.0
+		for i := 0; i < len(td1); i++ {
+			if len(td1[i]) != len(td2[i]) {
+				return -11.0
+			}
+			for j := 0; j < len(td1[i]); j++ {
+				if len(td1[i][j]) != len(td2[i][j]) {
+					return -11.0
+				}
+				for k := 0; k < len(td1[i][j]); k++ {
+					diff := math.Abs(td1[i][j][k][0]-td2[i][j][k][0]) + math.Abs(td1[i][j][k][1]-td2[i][j][k][1]) + math.Abs(td1[i][j][k][2]-td2[i][j][k][2])
+					diffs = append(diffs, diff)
+				}
+				for _, diff := range diffs {
+					sum += diff * diff
+				}
+			}
+		}
+		return math.Sqrt(sum) / (float64(len(td1) * len(td1) * len(td1)))
+	}
 }
 
 func (gi *GubeImpl) LookUp(r float64, g float64, b float64) (RGB, error) {
@@ -56,6 +112,78 @@ func (gi *GubeImpl) TableData3D() *[][][]RGB {
 
 func (gi *GubeImpl) Domain() (RGB, RGB) {
 	return gi.domainMin, gi.domainMax
+}
+
+func (gi *GubeImpl) String() string {
+	out := []string{}
+
+	out = append(out, fmt.Sprintf("TITLE: \"%s\"", gi.Name()))
+	out = append(out, "")
+	if gi.TableType() == LUT_1D {
+		out = append(out, fmt.Sprintf("LUT_1D_SIZE: %d", gi.TableSize()))
+	} else {
+		out = append(out, fmt.Sprintf("LUT_3D_SIZE: %d", gi.TableSize()))
+	}
+	out = append(out, "")
+	d_min, d_max := gi.Domain()
+	out = append(out, fmt.Sprintf("DOMAIN_MIN: %f %f %f", d_min[0], d_min[1], d_min[2]))
+	out = append(out, fmt.Sprintf("DOMAIN_MAX: %f %f %f", d_max[0], d_max[1], d_max[2]))
+	out = append(out, "")
+
+	if gi.TableType() == LUT_1D {
+		td := gi.TableData1D()
+		for _, rgb := range *td {
+			out = append(out, fmt.Sprintf("%f %f %f", rgb[0], rgb[1], rgb[2]))
+		}
+	} else {
+		td := gi.TableData3D()
+		for k := int64(0); k < gi.TableSize(); k++ {
+			for j := int64(0); j < gi.TableSize(); j++ {
+				for i := int64(0); i < gi.TableSize(); i++ {
+					out = append(out, fmt.Sprintf("%f %f %f", (*td)[i][j][k][0], (*td)[i][j][k][1], (*td)[i][j][k][2]))
+				}
+			}
+		}
+	}
+
+	return strings.Join(out, "\n")
+}
+
+func (c *GubeImpl) Resample(ts int) *GubeImpl {
+	d_min, d_max := c.Domain()
+	if c.TableType() == LUT_1D {
+		return nil
+	} else {
+		td := make([][][]RGB, ts)
+		for i := 0; i < ts; i++ {
+			td[i] = make([][]RGB, ts)
+			for j := 0; j < ts; j++ {
+				td[i][j] = make([]RGB, ts)
+			}
+		}
+		for i := 0; i < ts; i++ {
+			for j := 0; j < ts; j++ {
+				for k := 0; k < ts; k++ {
+					r := (d_max[0]-d_min[0])*float64(i)/float64(ts-1) + d_min[0]
+					g := (d_max[1]-d_min[1])*float64(j)/float64(ts-1) + d_min[1]
+					b := (d_max[2]-d_min[2])*float64(k)/float64(ts-1) + d_min[2]
+					rgb, err := c.LookUp(r, g, b)
+					if err != nil {
+						return nil
+					}
+					td[i][j][k] = rgb
+				}
+			}
+		}
+		return &GubeImpl{
+			name:        c.Name(),
+			tableType:   c.TableType(),
+			domainMin:   d_min,
+			domainMax:   d_max,
+			tableSize:   int64(ts),
+			tableData3D: &td,
+		}
+	}
 }
 
 func (gi *GubeImpl) lookUp3D(r, g, b float64) (RGB, error) {
